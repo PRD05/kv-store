@@ -79,6 +79,13 @@ export POSTGRES_PASSWORD=postgres
 export POSTGRES_HOST=localhost
 export POSTGRES_PORT=5432
 
+# Redis configuration (optional, falls back to in-memory cache if not set)
+export REDIS_HOST=localhost
+export REDIS_PORT=6379
+export REDIS_DB=0
+# export REDIS_PASSWORD=your_password  # Uncomment if Redis requires password
+# export USE_REDIS=False  # Set to False to use in-memory cache instead
+
 # Run migrations
 python manage.py migrate
 
@@ -227,6 +234,13 @@ POSTGRES_USER=postgres       # Database user
 POSTGRES_PASSWORD=postgres   # Database password
 POSTGRES_HOST=localhost      # Database host
 POSTGRES_PORT=5432           # Database port
+
+# Redis Cache (optional, falls back to in-memory cache if not configured)
+REDIS_HOST=localhost         # Redis host
+REDIS_PORT=6379              # Redis port
+REDIS_DB=0                   # Redis database number
+REDIS_PASSWORD=              # Redis password (optional)
+USE_REDIS=True               # Set to False to use in-memory cache
 ```
 
 ### Resource Limits

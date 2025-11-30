@@ -100,19 +100,52 @@ DATABASES = {
 }
 
 # Cache configuration for low-latency reads
-# Using in-memory cache (locmem) for minimal latency
-# For production, consider Redis for distributed caching
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'kv-store-cache',
-        'OPTIONS': {
-            'MAX_ENTRIES': 10000,  # Limit memory usage
-            'CULL_FREQUENCY': 3,   # Remove 1/3 of entries when max reached
-        },
-        'TIMEOUT': 300,  # 5 minutes default
+# Using Redis for distributed caching (works across multiple nodes)
+# Falls back to locmem if Redis is not available (for development)
+REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
+REDIS_DB = int(os.environ.get('REDIS_DB', 0))
+REDIS_PASSWORD = os.environ.get('REDIS_PASSWORD', None)
+
+# Use Redis if available, otherwise fallback to locmem
+# Set USE_REDIS=False to force locmem (for development without Redis)
+USE_REDIS = os.environ.get('USE_REDIS', 'True').lower() == 'true'
+
+if USE_REDIS:
+    # Redis configuration for distributed caching
+    redis_url = f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+    if REDIS_PASSWORD:
+        redis_url = f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+    
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': redis_url,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'SOCKET_CONNECT_TIMEOUT': 2,
+                'SOCKET_TIMEOUT': 2,
+                'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
+                'IGNORE_EXCEPTIONS': True,  # Fallback gracefully if Redis fails
+            },
+            'TIMEOUT': 300,  # 5 minutes default
+            'KEY_PREFIX': 'kv-store',
+            'VERSION': 1,
+        }
     }
-}
+else:
+    # Fallback to locmem for development
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'kv-store-cache',
+            'OPTIONS': {
+                'MAX_ENTRIES': 10000,  # Limit memory usage
+                'CULL_FREQUENCY': 3,   # Remove 1/3 of entries when max reached
+            },
+            'TIMEOUT': 300,  # 5 minutes default
+        }
+    }
 
 
 # Password validation
