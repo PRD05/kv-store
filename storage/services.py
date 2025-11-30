@@ -5,6 +5,7 @@ from django.db import transaction
 from django.db.models import F
 
 from storage.models import KeyValueEntry
+from storage.replication import replicate_put, replicate_delete, replicate_batch_put
 
 # Cache settings
 CACHE_TIMEOUT = 300  # 5 minutes
@@ -21,11 +22,22 @@ def _get_cache_key(key: str) -> str:
     return f"{CACHE_KEY_PREFIX}{key}"
 
 
-def put_value(key: str, value: str) -> tuple[KeyValueEntry, bool]:
+def put_value(key: str, value: str, replicate: bool = True) -> tuple[KeyValueEntry, bool]:
     """
     Optimized put operation using update_or_create for atomic upsert.
     Removes need for select_for_update() lock, reducing latency significantly.
     Uses F() expressions for atomic version increment at database level.
+    
+    Args:
+        key: The key to store
+        value: The value to store
+        replicate: Whether to replicate to other nodes (False for internal replication calls)
+    
+    Returns:
+        Tuple of (entry, created)
+    
+    Raises:
+        Exception: If replication fails to achieve quorum
     """
     # Use update_or_create which is optimized and doesn't require explicit locking
     # This is much faster than select_for_update() + save()
@@ -44,6 +56,16 @@ def put_value(key: str, value: str) -> tuple[KeyValueEntry, bool]:
             # Entry doesn't exist, create it
             entry = KeyValueEntry.objects.create(key=key, value=value, version=1)
             created = True
+        
+        # Replicate to other nodes (if replication is enabled)
+        replication_success, successful_nodes = replicate_put(key, value, replicate=replicate)
+        
+        if not replication_success:
+            # Rollback if replication failed to achieve quorum
+            raise Exception(
+                f"Failed to replicate to quorum of nodes. "
+                f"Successful: {len(successful_nodes) + 1} nodes"
+            )
         
         # Invalidate cache on write
         cache.delete(_get_cache_key(key))
@@ -72,12 +94,35 @@ def read_value(key: str) -> KeyValueEntry:
     return entry
 
 
-def delete_value(key: str) -> bool:
-    """Delete operation with cache invalidation."""
+def delete_value(key: str, replicate: bool = True) -> bool:
+    """
+    Delete operation with cache invalidation and replication.
+    
+    Args:
+        key: The key to delete
+        replicate: Whether to replicate to other nodes
+    
+    Returns:
+        True if deleted, False if key didn't exist
+    
+    Raises:
+        Exception: If replication fails to achieve quorum
+    """
     deleted, _ = KeyValueEntry.objects.filter(key=key).delete()
+    
     if deleted:
+        # Replicate deletion to other nodes
+        replication_success, successful_nodes = replicate_delete(key, replicate=replicate)
+        
+        if not replication_success:
+            raise Exception(
+                f"Failed to replicate delete to quorum of nodes. "
+                f"Successful: {len(successful_nodes) + 1} nodes"
+            )
+        
         # Invalidate cache on delete
         cache.delete(_get_cache_key(key))
+    
     return bool(deleted)
 
 
@@ -142,11 +187,22 @@ def read_range(
     return entries, None, False
 
 
-def batch_put(items: Iterable[dict]) -> List[KeyValueEntry]:
+def batch_put(items: Iterable[dict], replicate: bool = True) -> List[KeyValueEntry]:
     """
     Memory-efficient batch operation using chunked processing.
     Processes large batches in chunks to avoid memory issues with datasets larger than RAM.
     Uses bulk operations for optimal performance.
+    
+    Args:
+        items: Iterable of items to put
+        replicate: Whether to replicate to other nodes
+    
+    Returns:
+        List of created/updated entries
+    
+    Raises:
+        ValueError: If batch size exceeds maximum
+        Exception: If replication fails to achieve quorum
     """
     items_list = list(items)  # Convert to list for validation
     
@@ -212,6 +268,15 @@ def batch_put(items: Iterable[dict]) -> List[KeyValueEntry]:
         
         all_results.extend(chunk_results)
         all_cache_keys_to_invalidate.extend(chunk_cache_keys)
+    
+    # Replicate to other nodes
+    replication_success, successful_nodes = replicate_batch_put(items_list, replicate=replicate)
+    
+    if not replication_success:
+        raise Exception(
+            f"Failed to replicate batch to quorum of nodes. "
+            f"Successful: {len(successful_nodes) + 1} nodes"
+        )
     
     # Invalidate cache for all modified keys (batch operation)
     if all_cache_keys_to_invalidate:

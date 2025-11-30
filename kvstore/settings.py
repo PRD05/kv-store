@@ -175,3 +175,22 @@ SPECTACULAR_SETTINGS = {
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Replication Configuration
+# Configure replica nodes for multi-node replication
+# Example:
+# REPLICA_NODES = [
+#     {'url': 'http://node2:8000/kv-store/v1'},
+#     {'url': 'http://node3:8000/kv-store/v1'},
+# ]
+REPLICA_NODES = []  # Empty list = replication disabled (single node mode)
+
+# You can also configure via environment variable:
+# export REPLICA_NODES='[{"url":"http://node2:8000/kv-store/v1"},{"url":"http://node3:8000/kv-store/v1"}]'
+import json
+import os
+if os.environ.get('REPLICA_NODES'):
+    try:
+        REPLICA_NODES = json.loads(os.environ.get('REPLICA_NODES'))
+    except json.JSONDecodeError:
+        pass  # Keep empty list if invalid JSON

@@ -1,0 +1,145 @@
+# Docker Compose configuration for multi-node cluster with automatic failover
+version: '3.8'
+
+services:
+  # PostgreSQL for each node
+  postgres1:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: kvstore
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres1_data:/var/lib/postgresql/data
+    networks:
+      - kv_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres2:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: kvstore
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres2_data:/var/lib/postgresql/data
+    networks:
+      - kv_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres3:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: kvstore
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres3_data:/var/lib/postgresql/data
+    networks:
+      - kv_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # KV Store Node 1
+  kvstore1:
+    build: .
+    environment:
+      POSTGRES_DB: kvstore
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: postgres1
+      POSTGRES_PORT: 5432
+      REPLICA_NODES: '[{"url":"http://kvstore2:8000/kv-store/v1"},{"url":"http://kvstore3:8000/kv-store/v1"}]'
+    depends_on:
+      - postgres1
+    networks:
+      - kv_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/kv-store/v1/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # KV Store Node 2
+  kvstore2:
+    build: .
+    environment:
+      POSTGRES_DB: kvstore
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: postgres2
+      POSTGRES_PORT: 5432
+      REPLICA_NODES: '[{"url":"http://kvstore1:8000/kv-store/v1"},{"url":"http://kvstore3:8000/kv-store/v1"}]'
+    depends_on:
+      - postgres2
+    networks:
+      - kv_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/kv-store/v1/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # KV Store Node 3
+  kvstore3:
+    build: .
+    environment:
+      POSTGRES_DB: kvstore
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: postgres3
+      POSTGRES_PORT: 5432
+      REPLICA_NODES: '[{"url":"http://kvstore1:8000/kv-store/v1"},{"url":"http://kvstore2:8000/kv-store/v1"}]'
+    depends_on:
+      - postgres3
+    networks:
+      - kv_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/kv-store/v1/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # HAProxy for automatic failover
+  haproxy:
+    image: haproxy:2.8
+    volumes:
+      - ./examples/haproxy-failover.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "80:80"
+      - "8080:8080"  # Stats UI
+    depends_on:
+      - kvstore1
+      - kvstore2
+      - kvstore3
+    networks:
+      - kv_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/stats"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  kv_network:
+    driver: bridge
+
+volumes:
+  postgres1_data:
+  postgres2_data:
+  postgres3_data:
+

@@ -13,6 +13,7 @@ from storage.serializers import (
     KeyValueWriteSerializer,
 )
 from storage.services import batch_put, delete_value, put_value, read_range, read_value
+from storage.replication import get_cluster_status
 
 
 class KeyValueView(APIView):
@@ -77,7 +78,23 @@ class KeyValueView(APIView):
     def put(self, request, key: str):
         serializer = KeyValueWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        entry, created = put_value(key, serializer.validated_data["value"])
+        
+        # Check if this is a replication request (to prevent infinite loops)
+        is_replication = request.headers.get('X-Replication') == 'true'
+        
+        try:
+            entry, created = put_value(
+                key, 
+                serializer.validated_data["value"],
+                replicate=not is_replication  # Don't replicate if this IS a replication
+            )
+        except Exception as e:
+            # Replication failure
+            return Response(
+                {"detail": f"Replication failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
         status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(KeyValueSerializer(entry).data, status=status_code)
 
@@ -100,7 +117,17 @@ class KeyValueView(APIView):
         tags=["Key-Value Operations"],
     )
     def delete(self, request, key: str):
-        deleted = delete_value(key)
+        # Check if this is a replication request
+        is_replication = request.headers.get('X-Replication') == 'true'
+        
+        try:
+            deleted = delete_value(key, replicate=not is_replication)
+        except Exception as e:
+            return Response(
+                {"detail": f"Replication failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
         if not deleted:
             raise Http404
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -211,12 +238,47 @@ class BatchPutView(APIView):
         serializer = BatchPutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
+        # Check if this is a replication request
+        is_replication = request.headers.get('X-Replication') == 'true'
+        
         try:
-            entries = batch_put(serializer.validated_data["items"])
+            entries = batch_put(
+                serializer.validated_data["items"],
+                replicate=not is_replication
+            )
         except ValueError as e:
             # Handle batch size limit errors
             raise ValidationError({"detail": str(e)})
+        except Exception as e:
+            # Handle replication errors
+            return Response(
+                {"detail": f"Replication failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
         return Response(
             KeyValueSerializer(entries, many=True).data, status=status.HTTP_200_OK
         )
+
+
+class HealthCheckView(APIView):
+    """Health check and cluster status endpoint."""
+    
+    @extend_schema(
+        operation_id="health_check",
+        summary="Health check and cluster status",
+        description="Returns health status of this node and cluster replication status.",
+        responses={
+            200: OpenApiResponse(
+                description="Node is healthy and cluster status information",
+            ),
+        },
+        tags=["Health & Monitoring"],
+    )
+    def get(self, request):
+        cluster_status = get_cluster_status()
+        
+        return Response({
+            "status": "healthy",
+            "cluster": cluster_status,
+        }, status=status.HTTP_200_OK)
