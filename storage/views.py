@@ -1,6 +1,7 @@
 from django.http import Http404
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -111,7 +112,7 @@ class KeyValueRangeView(APIView):
     @extend_schema(
         operation_id="read_key_range",
         summary="Read key/value pairs in a range",
-        description="Retrieve all key/value pairs whose keys fall within the specified inclusive range [start, end]. Results are sorted by key.",
+        description="Retrieve key/value pairs whose keys fall within the specified inclusive range [start, end]. Results are sorted by key. Supports pagination for large datasets.",
         parameters=[
             OpenApiParameter(
                 name="start",
@@ -126,6 +127,20 @@ class KeyValueRangeView(APIView):
                 location=OpenApiParameter.QUERY,
                 description="The end key (inclusive)",
                 required=True,
+            ),
+            OpenApiParameter(
+                name="limit",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Maximum number of results to return (default: 10000, max: 10000)",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="cursor",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Cursor for pagination (key of last item from previous page)",
+                required=False,
             ),
         ],
         responses={
@@ -150,9 +165,29 @@ class KeyValueRangeView(APIView):
                 {"detail": "start key must be lexicographically <= end key"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        entries = read_range(start_key, end_key)
+        
+        # Parse pagination parameters
+        limit = request.query_params.get("limit")
+        limit = int(limit) if limit else None
+        
+        cursor = request.query_params.get("cursor")
+        
+        # Use memory-efficient range query with pagination
+        entries, next_cursor, has_more = read_range(
+            start_key, end_key, limit=limit, cursor=cursor
+        )
+        
         serializer = KeyValueSerializer(entries, many=True)
-        return Response({"count": len(serializer.data), "results": serializer.data})
+        response_data = {
+            "count": len(serializer.data),
+            "results": serializer.data,
+            "has_more": has_more,
+        }
+        
+        if next_cursor:
+            response_data["next_cursor"] = next_cursor
+        
+        return Response(response_data)
 
 
 class BatchPutView(APIView):
@@ -175,7 +210,13 @@ class BatchPutView(APIView):
     def post(self, request):
         serializer = BatchPutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        entries = batch_put(serializer.validated_data["items"])
+        
+        try:
+            entries = batch_put(serializer.validated_data["items"])
+        except ValueError as e:
+            # Handle batch size limit errors
+            raise ValidationError({"detail": str(e)})
+        
         return Response(
             KeyValueSerializer(entries, many=True).data, status=status.HTTP_200_OK
         )

@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from storage.models import KeyValueEntry
+from storage.services import MAX_BATCH_SIZE
 
 
 class KeyValueSerializer(serializers.ModelSerializer):
@@ -51,6 +52,13 @@ class BatchPutSerializer(serializers.Serializer):
     def validate_items(self, items):
         if not items:
             raise serializers.ValidationError("At least one item is required")
+        
+        # Enforce maximum batch size for predictable behavior
+        if len(items) > MAX_BATCH_SIZE:
+            raise serializers.ValidationError(
+                f"Batch size {len(items)} exceeds maximum of {MAX_BATCH_SIZE} items"
+            )
+        
         keys = [item["key"] for item in items]
         if len(keys) != len(set(keys)):
             raise serializers.ValidationError("Duplicate keys detected in batch request")
@@ -58,7 +66,15 @@ class BatchPutSerializer(serializers.Serializer):
 
 
 class KeyValueRangeResponseSerializer(serializers.Serializer):
-    """Serializer for range query responses."""
+    """Serializer for range query responses with pagination support."""
 
-    count = serializers.IntegerField(help_text="Number of items in the range")
+    count = serializers.IntegerField(help_text="Number of items returned in this page")
     results = KeyValueSerializer(many=True, help_text="List of key/value pairs in the range")
+    has_more = serializers.BooleanField(
+        help_text="Whether there are more results available beyond this page"
+    )
+    next_cursor = serializers.CharField(
+        required=False,
+        allow_null=True,
+        help_text="Cursor to use for fetching the next page (key of last item in results)",
+    )

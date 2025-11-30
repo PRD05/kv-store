@@ -88,7 +88,29 @@ DATABASES = {
         'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres'),
         'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
-        'CONN_MAX_AGE': 600,
+        'CONN_MAX_AGE': 600,  # Connection pooling for reduced latency
+        'OPTIONS': {
+            'connect_timeout': 5,
+            # Query timeout for predictable behavior under load
+            # Note: WAL and durability settings must be configured at PostgreSQL server level
+            # See postgresql.conf for: synchronous_commit, wal_level, checkpoint_timeout, etc.
+            'options': '-c statement_timeout=30000',  # 30 second query timeout
+        },
+    }
+}
+
+# Cache configuration for low-latency reads
+# Using in-memory cache (locmem) for minimal latency
+# For production, consider Redis for distributed caching
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'kv-store-cache',
+        'OPTIONS': {
+            'MAX_ENTRIES': 10000,  # Limit memory usage
+            'CULL_FREQUENCY': 3,   # Remove 1/3 of entries when max reached
+        },
+        'TIMEOUT': 300,  # 5 minutes default
     }
 }
 
