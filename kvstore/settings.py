@@ -119,7 +119,7 @@ if USE_REDIS:
     
     CACHES = {
         'default': {
-            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'BACKEND': 'django_redis.cache.RedisCache',
             'LOCATION': redis_url,
             'OPTIONS': {
                 'CLIENT_CLASS': 'django_redis.client.DefaultClient',
